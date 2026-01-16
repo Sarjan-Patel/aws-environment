@@ -744,6 +744,359 @@ async function overProvisionRandomAsg(
 }
 
 // ============================================================================
+// Safe Auto-Act Waste Scenarios
+// These create opportunities for the AI agent to auto-optimize safely
+// ============================================================================
+
+/**
+ * Creates an idle CI runner instance that finished its job but wasn't terminated.
+ * Safe Auto-Act can terminate these without human approval.
+ */
+async function createIdleCIRunner(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<string | null> {
+  // 6% probability
+  if (Math.random() > 0.06) {
+    return null
+  }
+
+  const region = pickRandom(REGIONS)
+  const instanceType = pickRandom(['t3.medium', 't3.large', 'c5.large'])
+  const runnerId = `ci-runner-${Date.now()}`
+
+  const { data: instance, error } = await supabase
+    .from('instances')
+    .insert({
+      account_id: accountId,
+      instance_id: generateInstanceId(),
+      name: runnerId,
+      instance_type: instanceType,
+      env: 'ci',
+      region: region,
+      state: 'running',
+      hourly_cost: INSTANCE_COSTS[instanceType] || 0.1,
+      current_cpu: randomBetween(0, 3), // Idle - job finished
+      current_memory: randomBetween(5, 15),
+      avg_cpu_7d: randomBetween(2, 10),
+      optimization_policy: 'auto_safe', // Safe to auto-terminate
+      tags: {
+        purpose: 'ci_runner',
+        created_by: 'drift_engine',
+        job_status: 'completed',
+        idle_since: new Date().toISOString(),
+      },
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    console.error('Failed to create idle CI runner:', error)
+    return null
+  }
+
+  await logResourceChangeEvent(
+    supabase,
+    accountId,
+    'instance',
+    instance.id,
+    'created',
+    null,
+    `Idle CI runner ${runnerId} (job completed, should be terminated)`
+  )
+
+  return `Created idle CI runner ${runnerId} with 0-3% CPU (auto_safe)`
+}
+
+/**
+ * Creates an S3 bucket without lifecycle policy - candidate for tiering optimization.
+ * Safe Auto-Act can add lifecycle policies to move old data to IA/Glacier.
+ */
+async function createUnoptimizedS3Bucket(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<string | null> {
+  // 5% probability
+  if (Math.random() > 0.05) {
+    return null
+  }
+
+  const bucketName = `logs-archive-${Date.now()}`
+  const region = pickRandom(REGIONS)
+
+  const { data: bucket, error } = await supabase
+    .from('s3_buckets')
+    .insert({
+      account_id: accountId,
+      name: bucketName,
+      env: pickRandom(['dev', 'staging']),
+      region: region,
+      lifecycle_policy: null, // No lifecycle - waste!
+      versioning_enabled: false,
+      optimization_policy: 'auto_safe',
+      tags: {
+        purpose: 'log_archive',
+        created_by: 'drift_engine',
+        needs_lifecycle: 'true',
+      },
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    console.error('Failed to create unoptimized S3 bucket:', error)
+    return null
+  }
+
+  // Add initial storage (all in Standard tier - inefficient)
+  const storageGb = randomBetween(100, 500)
+  await supabase.from('s3_bucket_usage_daily').insert({
+    bucket_id: bucket.id,
+    date: new Date().toISOString().split('T')[0],
+    storage_gb_standard: storageGb,
+    storage_gb_ia: 0, // Should have some data here
+    storage_gb_glacier: 0, // Should have some data here
+    requests_count: randomInt(100, 1000),
+    estimated_storage_cost: storageGb * PRICING.S3_STANDARD_PER_GB,
+    estimated_request_cost: 0.01,
+  })
+
+  await logResourceChangeEvent(
+    supabase,
+    accountId,
+    's3_bucket',
+    bucket.id,
+    'created',
+    null,
+    `S3 bucket ${bucketName} without lifecycle policy (${storageGb.toFixed(0)} GB in Standard)`
+  )
+
+  return `Created S3 bucket ${bucketName} without lifecycle policy (${storageGb.toFixed(0)} GB wasted in Standard tier)`
+}
+
+/**
+ * Creates a log group with no retention (never expires) or excessive retention.
+ * Safe Auto-Act can set appropriate retention to reduce storage costs.
+ */
+async function createLogGroupWithoutRetention(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<string | null> {
+  // 5% probability
+  if (Math.random() > 0.05) {
+    return null
+  }
+
+  const env = pickRandom(['dev', 'staging', 'preview'])
+  const logGroupName = `/aws/lambda/${env}-function-${Date.now()}`
+  const region = pickRandom(REGIONS)
+
+  const { data: logGroup, error } = await supabase
+    .from('log_groups')
+    .insert({
+      account_id: accountId,
+      name: logGroupName,
+      env: env,
+      region: region,
+      retention_days: null, // Never expires - waste!
+      optimization_policy: 'auto_safe',
+      tags: {
+        purpose: 'lambda_logs',
+        created_by: 'drift_engine',
+        needs_retention: 'true',
+      },
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    console.error('Failed to create log group without retention:', error)
+    return null
+  }
+
+  // Add accumulated logs (expensive without retention)
+  const storedGb = randomBetween(50, 200)
+  await supabase.from('log_group_usage_daily').insert({
+    log_group_id: logGroup.id,
+    date: new Date().toISOString().split('T')[0],
+    ingested_gb: randomBetween(0.5, 2),
+    stored_gb: storedGb, // Large because no retention!
+    estimated_ingestion_cost: 1.0,
+    estimated_storage_cost: storedGb * PRICING.LOG_STORAGE_PER_GB,
+  })
+
+  await logResourceChangeEvent(
+    supabase,
+    accountId,
+    'log_group',
+    logGroup.id,
+    'created',
+    null,
+    `Log group ${logGroupName} with no retention (${storedGb.toFixed(0)} GB accumulated)`
+  )
+
+  return `Created log group ${logGroupName} with no retention policy (${storedGb.toFixed(0)} GB accumulated)`
+}
+
+/**
+ * Creates a dev/staging instance that's running during off-hours.
+ * Safe Auto-Act can schedule these to stop nights/weekends.
+ */
+async function createOffHoursDevInstance(
+  supabase: SupabaseClient,
+  accountId: string,
+  simulatedDate: Date
+): Promise<string | null> {
+  // Only trigger on weekends or "night hours" (we simulate this as weekend)
+  if (!isWeekend(simulatedDate)) {
+    return null
+  }
+
+  // 10% probability on weekends
+  if (Math.random() > 0.10) {
+    return null
+  }
+
+  const region = pickRandom(REGIONS)
+  const instanceType = pickRandom(['t3.large', 'm5.large', 'm5.xlarge'])
+  const instanceName = `dev-workstation-${Date.now()}`
+
+  const { data: instance, error } = await supabase
+    .from('instances')
+    .insert({
+      account_id: accountId,
+      instance_id: generateInstanceId(),
+      name: instanceName,
+      instance_type: instanceType,
+      env: 'dev',
+      region: region,
+      state: 'running',
+      hourly_cost: INSTANCE_COSTS[instanceType] || 0.1,
+      current_cpu: randomBetween(0, 5), // Idle on weekend
+      current_memory: randomBetween(10, 25),
+      avg_cpu_7d: randomBetween(15, 40),
+      optimization_policy: 'auto_safe',
+      tags: {
+        purpose: 'developer_workstation',
+        created_by: 'drift_engine',
+        schedule: 'weekdays_only', // Should be off on weekends!
+        running_off_hours: 'true',
+      },
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    console.error('Failed to create off-hours dev instance:', error)
+    return null
+  }
+
+  await logResourceChangeEvent(
+    supabase,
+    accountId,
+    'instance',
+    instance.id,
+    'created',
+    null,
+    `Dev instance ${instanceName} running on weekend (should be scheduled off)`
+  )
+
+  return `Created dev instance ${instanceName} running on weekend (schedule: weekdays_only, auto_safe)`
+}
+
+/**
+ * Creates a feature branch environment that's older than 7 days.
+ * Safe Auto-Act can clean up stale feature environments.
+ */
+async function createStaleFeatureEnvironment(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<string | null> {
+  // 4% probability
+  if (Math.random() > 0.04) {
+    return null
+  }
+
+  const featureName = pickRandom([
+    'feature-user-auth',
+    'feature-payment-flow',
+    'feature-dashboard-v2',
+    'feature-api-refactor',
+    'feature-mobile-app',
+    'bugfix-login-issue',
+    'experiment-new-ui',
+  ])
+  const featureId = `${featureName}-${randomInt(100, 999)}`
+  const region = pickRandom(REGIONS)
+  const instanceType = 't3.medium'
+  const daysOld = randomInt(10, 30) // 10-30 days old
+
+  // Create ASG for feature environment
+  const { data: asg, error: asgError } = await supabase
+    .from('autoscaling_groups')
+    .insert({
+      account_id: accountId,
+      name: `${featureId}-asg`,
+      min_size: 0,
+      max_size: 4,
+      desired_capacity: 2,
+      instance_type: instanceType,
+      env: 'feature',
+      region: region,
+      optimization_policy: 'auto_safe',
+      tags: {
+        feature_branch: featureId,
+        created_by: 'drift_engine',
+        days_old: String(daysOld),
+        pr_status: pickRandom(['merged', 'closed', 'stale']),
+      },
+    })
+    .select('id')
+    .single()
+
+  if (asgError) {
+    console.error('Failed to create stale feature ASG:', asgError)
+    return null
+  }
+
+  // Create 2 instances for the feature environment
+  const instances = Array.from({ length: 2 }, () => ({
+    account_id: accountId,
+    instance_id: generateInstanceId(),
+    name: `${featureId}-instance`,
+    instance_type: instanceType,
+    env: 'feature',
+    region: region,
+    state: 'running',
+    autoscaling_group_id: asg.id,
+    hourly_cost: INSTANCE_COSTS[instanceType] || 0.1,
+    current_cpu: randomBetween(1, 8), // Very low - nobody using it
+    current_memory: randomBetween(10, 25),
+    avg_cpu_7d: randomBetween(3, 12),
+    optimization_policy: 'auto_safe',
+    tags: {
+      feature_branch: featureId,
+      created_by: 'drift_engine',
+      days_old: String(daysOld),
+    },
+  }))
+
+  await supabase.from('instances').insert(instances)
+
+  await logResourceChangeEvent(
+    supabase,
+    accountId,
+    'autoscaling_group',
+    asg.id,
+    'created',
+    null,
+    `Stale feature environment ${featureId} (${daysOld} days old, PR ${instances[0].tags.pr_status})`
+  )
+
+  return `Created stale feature environment ${featureId} (${daysOld} days old, auto_safe)`
+}
+
+// ============================================================================
 // Main Account Processing
 // ============================================================================
 
@@ -786,7 +1139,7 @@ async function processAccount(
   // 6. Update live utilization
   await updateLiveUtilization(supabase, accountId, nextDate)
 
-  // 7. Introduce startup mess scenarios
+  // 7. Introduce startup mess scenarios (original)
   const previewResult = await createForgottenPreviewEnvironment(supabase, accountId)
   if (previewResult) {
     result.scenariosTriggered.push(previewResult)
@@ -795,6 +1148,32 @@ async function processAccount(
   const overProvisionResult = await overProvisionRandomAsg(supabase, accountId)
   if (overProvisionResult) {
     result.scenariosTriggered.push(overProvisionResult)
+  }
+
+  // 8. Safe Auto-Act waste scenarios (for AI agent to auto-optimize)
+  const ciRunnerResult = await createIdleCIRunner(supabase, accountId)
+  if (ciRunnerResult) {
+    result.scenariosTriggered.push(ciRunnerResult)
+  }
+
+  const s3BucketResult = await createUnoptimizedS3Bucket(supabase, accountId)
+  if (s3BucketResult) {
+    result.scenariosTriggered.push(s3BucketResult)
+  }
+
+  const logGroupResult = await createLogGroupWithoutRetention(supabase, accountId)
+  if (logGroupResult) {
+    result.scenariosTriggered.push(logGroupResult)
+  }
+
+  const offHoursResult = await createOffHoursDevInstance(supabase, accountId, nextDate)
+  if (offHoursResult) {
+    result.scenariosTriggered.push(offHoursResult)
+  }
+
+  const staleFeatureResult = await createStaleFeatureEnvironment(supabase, accountId)
+  if (staleFeatureResult) {
+    result.scenariosTriggered.push(staleFeatureResult)
   }
 
   return result
