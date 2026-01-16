@@ -1096,6 +1096,487 @@ async function createStaleFeatureEnvironment(
   return `Created stale feature environment ${featureId} (${daysOld} days old, auto_safe)`
 }
 
+/**
+ * Creates an orphaned Elastic IP that was allocated but never attached.
+ * Safe Auto-Act can release these to stop the $0.005/hour charge.
+ */
+async function createOrphanedElasticIP(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<string | null> {
+  // 5% probability
+  if (Math.random() > 0.05) {
+    return null
+  }
+
+  const region = pickRandom(REGIONS)
+  const allocationId = `eipalloc-${Array.from({ length: 17 }, () =>
+    Math.floor(Math.random() * 16).toString(16)
+  ).join('')}`
+  const publicIp = `${randomInt(1, 255)}.${randomInt(0, 255)}.${randomInt(0, 255)}.${randomInt(1, 254)}`
+
+  const { data: eip, error } = await supabase
+    .from('elastic_ips')
+    .insert({
+      account_id: accountId,
+      allocation_id: allocationId,
+      public_ip: publicIp,
+      associated_instance_id: null, // Not attached = waste!
+      associated_lb_arn: null,
+      state: 'unassociated',
+      hourly_cost: 0.005, // AWS charges for unattached EIPs
+      optimization_policy: 'auto_safe',
+      tags: {
+        created_by: 'drift_engine',
+        reason: 'allocated_never_used',
+        waste_type: 'orphaned_eip',
+      },
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    console.error('Failed to create orphaned EIP:', error)
+    return null
+  }
+
+  await logResourceChangeEvent(
+    supabase,
+    accountId,
+    'elastic_ip',
+    eip.id,
+    'created',
+    null,
+    `Orphaned EIP ${publicIp} (${allocationId}) - $0.005/hour waste`
+  )
+
+  return `Created orphaned Elastic IP ${publicIp} ($0.005/hour, auto_safe)`
+}
+
+/**
+ * Simulates an EIP becoming orphaned when its instance is terminated.
+ * This is a common real-world scenario - instance deleted but EIP remains.
+ */
+async function orphanExistingElasticIP(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<string | null> {
+  // 4% probability
+  if (Math.random() > 0.04) {
+    return null
+  }
+
+  // Find an associated EIP to orphan
+  const { data: eips, error } = await supabase
+    .from('elastic_ips')
+    .select('id, public_ip, allocation_id, associated_instance_id')
+    .eq('account_id', accountId)
+    .eq('state', 'associated')
+    .not('associated_instance_id', 'is', null)
+    .limit(5)
+
+  if (error || !eips?.length) {
+    return null
+  }
+
+  const eip = pickRandom(eips)
+
+  // Orphan the EIP (simulate instance termination)
+  const { error: updateError } = await supabase
+    .from('elastic_ips')
+    .update({
+      associated_instance_id: null,
+      state: 'unassociated',
+      hourly_cost: 0.005,
+      updated_at: new Date().toISOString(),
+      tags: {
+        orphaned_at: new Date().toISOString(),
+        previous_instance: eip.associated_instance_id,
+        reason: 'instance_terminated',
+      },
+    })
+    .eq('id', eip.id)
+
+  if (updateError) {
+    console.error('Failed to orphan EIP:', updateError)
+    return null
+  }
+
+  await logResourceChangeEvent(
+    supabase,
+    accountId,
+    'elastic_ip',
+    eip.id,
+    'state',
+    'associated',
+    'unassociated (instance terminated)'
+  )
+
+  return `Orphaned EIP ${eip.public_ip} after instance ${eip.associated_instance_id} termination`
+}
+
+// ============================================================================
+// Additional Waste Scenarios (Complete Coverage)
+// ============================================================================
+
+/**
+ * Creates an unattached EBS volume (orphaned after instance termination).
+ * Common waste: ~$0.08/GB/month for gp3 volumes sitting unused.
+ */
+async function createUnattachedVolume(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<string | null> {
+  // 6% probability
+  if (Math.random() > 0.06) {
+    return null
+  }
+
+  const region = pickRandom(REGIONS)
+  const volumeId = `vol-${Array.from({ length: 17 }, () =>
+    Math.floor(Math.random() * 16).toString(16)
+  ).join('')}`
+  const sizeGib = pickRandom([50, 100, 200, 500, 1000])
+  const volumeType = pickRandom(['gp3', 'gp2', 'io1'])
+  const monthlyCost = sizeGib * 0.08 // ~$0.08/GB/month for gp3
+
+  const { data: volume, error } = await supabase
+    .from('volumes')
+    .insert({
+      account_id: accountId,
+      volume_id: volumeId,
+      region: region,
+      size_gib: sizeGib,
+      volume_type: volumeType,
+      state: 'available', // Not attached = waste!
+      attached_instance_id: null,
+      monthly_cost: monthlyCost,
+      last_used_at: new Date(Date.now() - randomInt(7, 60) * 24 * 60 * 60 * 1000).toISOString(),
+      tags: {
+        created_by: 'drift_engine',
+        waste_type: 'unattached_volume',
+        previous_instance: `i-${randomInt(1000000, 9999999)}`,
+      },
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    console.error('Failed to create unattached volume:', error)
+    return null
+  }
+
+  await logResourceChangeEvent(
+    supabase,
+    accountId,
+    'volume',
+    volume.id,
+    'created',
+    null,
+    `Unattached volume ${volumeId} (${sizeGib} GiB ${volumeType}) - $${monthlyCost.toFixed(2)}/month waste`
+  )
+
+  return `Created unattached volume ${volumeId} (${sizeGib} GiB, $${monthlyCost.toFixed(2)}/month)`
+}
+
+/**
+ * Creates an old EBS snapshot that should be cleaned up.
+ * Snapshots cost ~$0.05/GB/month and accumulate over time.
+ */
+async function createOldSnapshot(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<string | null> {
+  // 5% probability
+  if (Math.random() > 0.05) {
+    return null
+  }
+
+  const region = pickRandom(REGIONS)
+  const snapshotId = `snap-${Array.from({ length: 17 }, () =>
+    Math.floor(Math.random() * 16).toString(16)
+  ).join('')}`
+  const sizeGib = pickRandom([50, 100, 200, 500])
+  const daysOld = randomInt(60, 365) // 60 days to 1 year old
+  const monthlyCost = sizeGib * 0.05
+
+  const { data: snapshot, error } = await supabase
+    .from('snapshots')
+    .insert({
+      account_id: accountId,
+      snapshot_id: snapshotId,
+      region: region,
+      source_volume_id: null, // Source volume may be deleted
+      size_gib: sizeGib,
+      retention_policy: null, // No retention policy = accumulates forever
+      monthly_cost: monthlyCost,
+      tags: {
+        created_by: 'drift_engine',
+        waste_type: 'old_snapshot',
+        days_old: String(daysOld),
+        source_deleted: 'true',
+      },
+      created_at: new Date(Date.now() - daysOld * 24 * 60 * 60 * 1000).toISOString(),
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    console.error('Failed to create old snapshot:', error)
+    return null
+  }
+
+  await logResourceChangeEvent(
+    supabase,
+    accountId,
+    'snapshot',
+    snapshot.id,
+    'created',
+    null,
+    `Old snapshot ${snapshotId} (${daysOld} days old, ${sizeGib} GiB) - $${monthlyCost.toFixed(2)}/month`
+  )
+
+  return `Created old snapshot ${snapshotId} (${daysOld} days old, $${monthlyCost.toFixed(2)}/month)`
+}
+
+/**
+ * Creates an idle/over-provisioned RDS instance.
+ * Common waste: db.r5.xlarge with 5% CPU usage.
+ */
+async function createIdleRdsInstance(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<string | null> {
+  // 4% probability
+  if (Math.random() > 0.04) {
+    return null
+  }
+
+  const region = pickRandom(REGIONS)
+  const env = pickRandom(['dev', 'staging', 'preview'])
+  const dbInstanceId = `${env}-db-${Date.now()}`
+  const instanceClass = pickRandom(['db.r5.large', 'db.r5.xlarge', 'db.m5.large', 'db.m5.xlarge'])
+
+  // Hourly costs for RDS instances
+  const rdsCosts: Record<string, number> = {
+    'db.r5.large': 0.25,
+    'db.r5.xlarge': 0.50,
+    'db.m5.large': 0.17,
+    'db.m5.xlarge': 0.34,
+  }
+  const hourlyCost = rdsCosts[instanceClass] || 0.25
+
+  const { data: rds, error } = await supabase
+    .from('rds_instances')
+    .insert({
+      account_id: accountId,
+      db_instance_id: dbInstanceId,
+      engine: pickRandom(['postgres', 'mysql']),
+      instance_class: instanceClass,
+      allocated_storage_gib: pickRandom([100, 200, 500]),
+      env: env,
+      region: region,
+      state: 'available',
+      hourly_cost: hourlyCost,
+      storage_monthly_cost: 10,
+      avg_cpu_7d: randomBetween(2, 15), // Very low CPU = idle
+      avg_connections_7d: randomBetween(1, 10), // Very few connections
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    console.error('Failed to create idle RDS:', error)
+    return null
+  }
+
+  await logResourceChangeEvent(
+    supabase,
+    accountId,
+    'rds_instance',
+    rds.id,
+    'created',
+    null,
+    `Idle RDS ${dbInstanceId} (${instanceClass}, ${(hourlyCost * 720).toFixed(0)}/month, ~5% CPU)`
+  )
+
+  return `Created idle RDS ${dbInstanceId} (${instanceClass}, $${(hourlyCost * 720).toFixed(0)}/month, ~5% CPU)`
+}
+
+/**
+ * Creates an idle Load Balancer with no traffic.
+ * ALBs cost ~$16/month minimum even with no traffic.
+ */
+async function createIdleLoadBalancer(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<string | null> {
+  // 4% probability
+  if (Math.random() > 0.04) {
+    return null
+  }
+
+  const region = pickRandom(REGIONS)
+  const env = pickRandom(['dev', 'staging', 'preview', 'feature'])
+  const lbName = `${env}-alb-${Date.now()}`
+  const lbArn = `arn:aws:elasticloadbalancing:${region}:123456789:loadbalancer/app/${lbName}/${randomInt(1000000, 9999999)}`
+  const lbType = pickRandom(['application', 'network'])
+  const hourlyCost = lbType === 'application' ? 0.0225 : 0.0225 // ~$16/month
+
+  const { data: lb, error } = await supabase
+    .from('load_balancers')
+    .insert({
+      account_id: accountId,
+      lb_arn: lbArn,
+      name: lbName,
+      type: lbType,
+      env: env,
+      region: region,
+      hourly_cost: hourlyCost,
+      avg_request_count_7d: randomBetween(0, 100), // Almost no traffic
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    console.error('Failed to create idle LB:', error)
+    return null
+  }
+
+  await logResourceChangeEvent(
+    supabase,
+    accountId,
+    'load_balancer',
+    lb.id,
+    'created',
+    null,
+    `Idle ${lbType} LB ${lbName} (~0 requests/day, $${(hourlyCost * 720).toFixed(0)}/month)`
+  )
+
+  return `Created idle ${lbType} LB ${lbName} (~0 requests, $${(hourlyCost * 720).toFixed(0)}/month)`
+}
+
+/**
+ * Creates an over-provisioned Lambda function.
+ * Common waste: 3GB memory allocated but only uses 256MB.
+ */
+async function createOverProvisionedLambda(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<string | null> {
+  // 5% probability
+  if (Math.random() > 0.05) {
+    return null
+  }
+
+  const region = pickRandom(REGIONS)
+  const env = pickRandom(['dev', 'staging', 'prod'])
+  const functionName = `${env}-${pickRandom(['api', 'worker', 'processor', 'handler'])}-${Date.now()}`
+
+  // Over-provisioned: high memory but low actual usage
+  const memoryMb = pickRandom([1024, 2048, 3008]) // Way more than needed
+  const actualMemoryUsed = randomInt(128, 256) // Actually only uses this much
+  const invocations7d = randomInt(1000, 50000)
+  const avgDurationMs = randomBetween(50, 500)
+
+  // Lambda pricing: $0.0000166667 per GB-second
+  const gbSeconds = (memoryMb / 1024) * (avgDurationMs / 1000) * invocations7d / 7
+  const estimatedMonthlyCost = gbSeconds * 0.0000166667 * 30
+
+  const { data: lambda, error } = await supabase
+    .from('lambda_functions')
+    .insert({
+      account_id: accountId,
+      name: functionName,
+      env: env,
+      region: region,
+      memory_mb: memoryMb,
+      timeout_seconds: 30,
+      provisioned_concurrency: 0,
+      invocations_7d: invocations7d,
+      avg_duration_ms_7d: avgDurationMs,
+      estimated_monthly_cost: estimatedMonthlyCost,
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    console.error('Failed to create over-provisioned Lambda:', error)
+    return null
+  }
+
+  await logResourceChangeEvent(
+    supabase,
+    accountId,
+    'lambda_function',
+    lambda.id,
+    'created',
+    null,
+    `Over-provisioned Lambda ${functionName} (${memoryMb}MB allocated, ~${actualMemoryUsed}MB used)`
+  )
+
+  return `Created over-provisioned Lambda ${functionName} (${memoryMb}MB allocated, only needs ~${actualMemoryUsed}MB)`
+}
+
+/**
+ * Creates a cache cluster (ElastiCache) that's idle or over-provisioned.
+ */
+async function createIdleCacheCluster(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<string | null> {
+  // 3% probability
+  if (Math.random() > 0.03) {
+    return null
+  }
+
+  const region = pickRandom(REGIONS)
+  const env = pickRandom(['dev', 'staging', 'preview'])
+  const clusterId = `${env}-redis-${Date.now()}`
+
+  const nodeTypes: Record<string, number> = {
+    'cache.t3.medium': 0.068,
+    'cache.r5.large': 0.228,
+    'cache.m5.large': 0.156,
+  }
+  const nodeType = pickRandom(Object.keys(nodeTypes))
+  const hourlyCost = nodeTypes[nodeType]
+
+  const { data: cache, error } = await supabase
+    .from('cache_clusters')
+    .insert({
+      account_id: accountId,
+      cluster_id: clusterId,
+      engine: 'redis',
+      node_type: nodeType,
+      num_nodes: 1,
+      env: env,
+      region: region,
+      hourly_cost: hourlyCost,
+      avg_cpu_7d: randomBetween(1, 10), // Very low
+      avg_connections_7d: randomBetween(0, 5), // Almost no connections
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    console.error('Failed to create idle cache cluster:', error)
+    return null
+  }
+
+  await logResourceChangeEvent(
+    supabase,
+    accountId,
+    'cache_cluster',
+    cache.id,
+    'created',
+    null,
+    `Idle Redis cluster ${clusterId} (${nodeType}, ~1% CPU, $${(hourlyCost * 720).toFixed(0)}/month)`
+  )
+
+  return `Created idle Redis ${clusterId} (${nodeType}, ~1% CPU, $${(hourlyCost * 720).toFixed(0)}/month)`
+}
+
 // ============================================================================
 // Main Account Processing
 // ============================================================================
@@ -1174,6 +1655,51 @@ async function processAccount(
   const staleFeatureResult = await createStaleFeatureEnvironment(supabase, accountId)
   if (staleFeatureResult) {
     result.scenariosTriggered.push(staleFeatureResult)
+  }
+
+  // 9. Elastic IP waste scenarios
+  const orphanedEipResult = await createOrphanedElasticIP(supabase, accountId)
+  if (orphanedEipResult) {
+    result.scenariosTriggered.push(orphanedEipResult)
+  }
+
+  const existingEipOrphanResult = await orphanExistingElasticIP(supabase, accountId)
+  if (existingEipOrphanResult) {
+    result.scenariosTriggered.push(existingEipOrphanResult)
+  }
+
+  // 10. Storage waste scenarios
+  const unattachedVolumeResult = await createUnattachedVolume(supabase, accountId)
+  if (unattachedVolumeResult) {
+    result.scenariosTriggered.push(unattachedVolumeResult)
+  }
+
+  const oldSnapshotResult = await createOldSnapshot(supabase, accountId)
+  if (oldSnapshotResult) {
+    result.scenariosTriggered.push(oldSnapshotResult)
+  }
+
+  // 11. Database waste scenarios
+  const idleRdsResult = await createIdleRdsInstance(supabase, accountId)
+  if (idleRdsResult) {
+    result.scenariosTriggered.push(idleRdsResult)
+  }
+
+  const idleCacheResult = await createIdleCacheCluster(supabase, accountId)
+  if (idleCacheResult) {
+    result.scenariosTriggered.push(idleCacheResult)
+  }
+
+  // 12. Networking waste scenarios
+  const idleLbResult = await createIdleLoadBalancer(supabase, accountId)
+  if (idleLbResult) {
+    result.scenariosTriggered.push(idleLbResult)
+  }
+
+  // 13. Compute waste scenarios
+  const overProvisionedLambdaResult = await createOverProvisionedLambda(supabase, accountId)
+  if (overProvisionedLambdaResult) {
+    result.scenariosTriggered.push(overProvisionedLambdaResult)
   }
 
   return result
