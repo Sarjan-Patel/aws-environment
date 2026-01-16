@@ -813,6 +813,10 @@ Deno.serve(async (req: Request) => {
   const startTime = Date.now()
 
   try {
+    // Note: For production, add proper authentication here.
+    // Currently allowing unauthenticated access for pg_cron compatibility.
+    // The function only modifies demo data and is not exposed publicly.
+
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
