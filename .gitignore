@@ -9,6 +9,10 @@ node_modules/
 # TypeScript build output
 dist/
 
+# Next.js build output
+.next/
+out/
+
 # IDE
 .idea/
 .vscode/

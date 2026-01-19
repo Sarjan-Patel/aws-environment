@@ -9,6 +9,17 @@ import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Pagination } from "@/components/ui/pagination"
+import { Switch } from "@/components/ui/switch"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { RecommendationCard } from "@/components/approvals/RecommendationCard"
 import {
   useRecommendations,
@@ -20,9 +31,11 @@ import {
   useScheduleRecommendation,
   useExecuteRecommendation,
 } from "@/hooks/useRecommendations"
-import { useExecuteAction } from "@/hooks/useActionExecution"
+import { useExecuteAction, useExecutionStats, useAuditLog, AuditLogEntry } from "@/hooks/useActionExecution"
+import { useExecutionMode } from "@/hooks/useExecutionMode"
 import { ActionType, ResourceType } from "@/lib/agent/scenarios"
-import { useRefreshDetection } from "@/hooks/useWasteDetection"
+import { useRefreshDetection, useAutoSafeDetections, useDriftTick, WasteDetection } from "@/hooks/useWasteDetection"
+import { WASTE_SCENARIOS } from "@/lib/agent/scenarios"
 import { Recommendation, RecommendationStatus, ImpactLevel } from "@/lib/agent/recommender"
 import {
   FileCheck,
@@ -45,6 +58,13 @@ import {
   CalendarClock,
   Play,
   RotateCcw,
+  Sparkles,
+  Settings2,
+  PlayCircle,
+  AlertCircle,
+  Calendar,
+  TrendingUp,
+  DollarSign,
 } from "lucide-react"
 
 // Resource types for filtering
@@ -74,7 +94,7 @@ const impactOrder: Record<ImpactLevel, number> = {
   low: 1,
 }
 
-type TabType = "pending" | "approved" | "rejected" | "snoozed" | "scheduled" | "executed"
+type TabType = "pending" | "auto-safe" | "approved" | "rejected" | "snoozed" | "scheduled" | "executed"
 
 export default function ApprovalsPage() {
   // State
@@ -85,8 +105,9 @@ export default function ApprovalsPage() {
   const [processingId, setProcessingId] = useState<string | null>(null)
 
   // Fetch recommendations based on active tab
-  const statusMap: Record<TabType, RecommendationStatus | RecommendationStatus[]> = {
+  const statusMap: Record<TabType, RecommendationStatus | RecommendationStatus[] | null> = {
     pending: "pending",
+    "auto-safe": null, // Auto-safe uses a different data source
     approved: "approved",
     rejected: "rejected",
     snoozed: "snoozed",
@@ -95,10 +116,33 @@ export default function ApprovalsPage() {
   }
 
   const { data: recommendations, isLoading, refetch } = useRecommendations({
-    status: statusMap[activeTab],
+    status: statusMap[activeTab] ?? "pending", // Default to pending if null (auto-safe tab)
   })
 
   const { data: summary, refetch: refetchSummary } = useRecommendationSummary()
+
+  // Auto-safe detections
+  const { data: autoSafeDetections, totalSavings: autoSafeSavings, isLoading: autoSafeLoading } = useAutoSafeDetections()
+  const [executingAutoSafeId, setExecutingAutoSafeId] = useState<string | null>(null)
+
+  // Execution mode and stats (from Auto-Safe page)
+  const { mode, isAutomated, setMode, isUpdating: modeUpdating, isMounted } = useExecutionMode()
+  const { stats: executionStats, isLoading: statsLoading } = useExecutionStats()
+  const { data: auditLog, isLoading: auditLogLoading } = useAuditLog(20)
+  const driftTick = useDriftTick()
+
+  // Dialogs state
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean
+    detection: WasteDetection | null
+  }>({ open: false, detection: null })
+
+  const [executeAllDialog, setExecuteAllDialog] = useState<{
+    open: boolean
+    detections: WasteDetection[]
+  }>({ open: false, detections: [] })
+
+  const [executingAll, setExecutingAll] = useState(false)
 
   // Mutations
   const generateMutation = useGenerateRecommendations()
@@ -384,6 +428,125 @@ export default function ApprovalsPage() {
     return date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
   }
 
+  // Handle auto-safe execution
+  const handleExecuteAutoSafe = async (detection: WasteDetection) => {
+    setExecutingAutoSafeId(detection.id)
+    setConfirmDialog({ open: false, detection: null })
+    try {
+      const scenario = WASTE_SCENARIOS[detection.scenarioId as keyof typeof WASTE_SCENARIOS]
+      if (!scenario) {
+        console.error(`Unknown scenario: ${detection.scenarioId}`)
+        return
+      }
+
+      await executeActionMutation.mutateAsync({
+        action: scenario.action,
+        resourceType: scenario.resourceType,
+        resourceId: detection.resourceId,
+        resourceName: detection.resourceName,
+        detectionId: detection.id,
+        scenarioId: detection.scenarioId,
+        details: detection.details,
+      })
+
+      console.log(`[Approvals] ✅ Auto-safe action executed for ${detection.resourceName}`)
+      await refreshDetection.mutateAsync()
+    } catch (err) {
+      console.error("Failed to execute auto-safe action:", err)
+    } finally {
+      setExecutingAutoSafeId(null)
+    }
+  }
+
+  // Handle execution mode change
+  const handleModeChange = async (checked: boolean) => {
+    const newMode = checked ? "automated" : "manual"
+    console.log(`[Approvals] Switching mode: ${mode} -> ${newMode}`)
+
+    try {
+      await setMode(newMode)
+
+      // If switching to automated AND there are pending actions, trigger drift-tick
+      if (newMode === "automated" && autoSafeDetections && autoSafeDetections.length > 0) {
+        console.log(`[Approvals] Auto-executing ${autoSafeDetections.length} pending actions...`)
+        const result = await driftTick.mutateAsync({ autoExecute: true })
+        console.log(`[Approvals] Drift-tick complete: Executed ${result.execution.executed}`)
+
+        if (result.execution.executed > 0) {
+          await refreshDetection.mutateAsync()
+        }
+      }
+    } catch (error) {
+      console.error(`[Approvals] Error during mode change:`, error)
+    }
+  }
+
+  // Handle execute all auto-safe actions
+  const handleExecuteAll = async (detections: WasteDetection[]) => {
+    setExecuteAllDialog({ open: false, detections: [] })
+    setExecutingAll(true)
+
+    console.log(`[Approvals] Executing all ${detections.length} auto-safe actions...`)
+    let successCount = 0
+    let failCount = 0
+
+    for (const detection of detections) {
+      try {
+        setExecutingAutoSafeId(detection.id)
+        const scenario = WASTE_SCENARIOS[detection.scenarioId as keyof typeof WASTE_SCENARIOS]
+        if (!scenario) continue
+
+        await executeActionMutation.mutateAsync({
+          action: scenario.action,
+          resourceType: scenario.resourceType,
+          resourceId: detection.resourceId,
+          resourceName: detection.resourceName,
+          detectionId: detection.id,
+          scenarioId: detection.scenarioId,
+          details: detection.details,
+        })
+        successCount++
+      } catch (error) {
+        console.error(`Failed to execute ${detection.resourceName}:`, error)
+        failCount++
+      }
+    }
+
+    setExecutingAutoSafeId(null)
+    setExecutingAll(false)
+    console.log(`[Approvals] Execute All complete - Success: ${successCount}, Failed: ${failCount}`)
+    await refreshDetection.mutateAsync()
+  }
+
+  // Get action description for confirmation dialog
+  const getActionDescription = (detection: WasteDetection): string => {
+    const scenario = WASTE_SCENARIOS[detection.scenarioId as keyof typeof WASTE_SCENARIOS]
+    switch (scenario?.action) {
+      case "terminate_instance": return "terminate this instance"
+      case "stop_instance": return "stop this instance"
+      case "terminate_asg": return "terminate this auto scaling group"
+      case "scale_down_asg": return "scale down this auto scaling group"
+      case "release_eip": return "release this Elastic IP"
+      case "delete_volume": return "delete this EBS volume"
+      case "delete_snapshot": return "delete this snapshot"
+      case "add_lifecycle_policy": return "add a lifecycle policy to this bucket"
+      case "set_retention": return "set a 30-day retention policy"
+      default: return "execute this optimization"
+    }
+  }
+
+  // Filter auto-safe detections by resource type
+  const filteredAutoSafeDetections = useMemo(() => {
+    if (!autoSafeDetections) return []
+    if (resourceFilter === "all") return autoSafeDetections
+    return autoSafeDetections.filter((d) => d.resourceType === resourceFilter)
+  }, [autoSafeDetections, resourceFilter])
+
+  // Calculate filtered auto-safe savings
+  const filteredAutoSafeSavings = useMemo(() => {
+    return filteredAutoSafeDetections.reduce((sum, d) => sum + d.potentialSavings, 0)
+  }, [filteredAutoSafeDetections])
+
   return (
     <div className="flex min-h-screen flex-col bg-muted/30">
       <Header />
@@ -395,25 +558,54 @@ export default function ApprovalsPage() {
             <div>
               <div className="flex items-center gap-3 mb-2">
                 <FileCheck className="h-8 w-8 text-amber-500" />
-                <h1 className="text-3xl font-bold tracking-tight">Mode 3: Approvals</h1>
+                <h1 className="text-3xl font-bold tracking-tight">Approvals</h1>
               </div>
               <p className="text-muted-foreground">
-                Review and approve optimization recommendations requiring human oversight
+                Review and manage all optimizations in one place
               </p>
             </div>
-            <Button onClick={handleRefresh} disabled={generateMutation.isPending} variant="outline" size="sm">
-              {generateMutation.isPending ? (
+            <Button onClick={handleRefresh} disabled={generateMutation.isPending || driftTick.isPending} variant="outline" size="sm">
+              {generateMutation.isPending || driftTick.isPending ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               ) : (
                 <RefreshCw className="h-4 w-4 mr-2" />
               )}
-              {generateMutation.isPending ? "Scanning..." : "Refresh"}
+              {generateMutation.isPending || driftTick.isPending ? "Scanning..." : "Refresh"}
             </Button>
           </div>
 
+          {/* Automated Mode Banner - only show when on Auto-Safe tab */}
+          {activeTab === "auto-safe" && isMounted && isAutomated && (
+            <div className="flex items-center gap-3 p-4 rounded-lg border border-green-200 bg-green-50 dark:bg-green-950/30 dark:border-green-900">
+              <div className="h-10 w-10 rounded-full bg-green-100 dark:bg-green-900 flex items-center justify-center">
+                <Zap className="h-5 w-5 text-green-600 dark:text-green-400" />
+              </div>
+              <div className="flex-1">
+                <div className="font-medium text-green-800 dark:text-green-200">
+                  Automated Mode Active
+                </div>
+                <p className="text-sm text-green-600 dark:text-green-400">
+                  Auto-safe actions will be executed automatically when detected. Manual approval items still require review.
+                </p>
+              </div>
+              <Badge className="bg-green-600 text-white">Auto</Badge>
+            </div>
+          )}
+
           {/* Summary Stats */}
           {summary && (
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
+              <Card className={activeTab === "auto-safe" ? "ring-2 ring-primary" : ""}>
+                <CardContent className="pt-4">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-5 w-5 text-emerald-500" />
+                    <div>
+                      <p className="text-2xl font-bold">{autoSafeDetections?.length ?? 0}</p>
+                      <p className="text-xs text-muted-foreground">Auto-Safe</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
               <Card>
                 <CardContent className="pt-4">
                   <div className="flex items-center gap-2">
@@ -496,6 +688,71 @@ export default function ApprovalsPage() {
             </div>
           )}
 
+          {/* Execution Stats Row */}
+          <div className="grid gap-4 grid-cols-2 md:grid-cols-5">
+            <Card className="bg-muted/30">
+              <CardContent className="pt-4 pb-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Today</p>
+                    <p className="text-2xl font-bold">{statsLoading ? "..." : executionStats.today}</p>
+                  </div>
+                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-muted/30">
+              <CardContent className="pt-4 pb-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-muted-foreground">This Week</p>
+                    <p className="text-2xl font-bold">{statsLoading ? "..." : executionStats.thisWeek}</p>
+                  </div>
+                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-muted/30">
+              <CardContent className="pt-4 pb-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-muted-foreground">This Month</p>
+                    <p className="text-2xl font-bold">{statsLoading ? "..." : executionStats.thisMonth}</p>
+                  </div>
+                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-muted/30">
+              <CardContent className="pt-4 pb-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-muted-foreground">All Time</p>
+                    <p className="text-2xl font-bold">{statsLoading ? "..." : executionStats.allTime}</p>
+                  </div>
+                  <CheckCircle className="h-4 w-4 text-green-500" />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-gradient-to-br from-green-500/10 to-emerald-500/10 border-green-200">
+              <CardContent className="pt-4 pb-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total Saved</p>
+                    <p className="text-2xl font-bold text-green-600">
+                      ${statsLoading ? "..." : executionStats.totalSavingsRealized.toFixed(0)}
+                    </p>
+                  </div>
+                  <TrendingUp className="h-4 w-4 text-green-500" />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
           {/* Resource Type Filter */}
           <Card>
             <CardContent className="py-4">
@@ -544,6 +801,15 @@ export default function ApprovalsPage() {
           {/* Tabs */}
           <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabType)}>
             <TabsList className="flex-wrap h-auto gap-1">
+              <TabsTrigger value="auto-safe" className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4" />
+                Auto-Safe
+                {autoSafeDetections && autoSafeDetections.length > 0 && (
+                  <Badge variant="secondary" className="ml-1 bg-emerald-100 text-emerald-700">
+                    {autoSafeDetections.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
               <TabsTrigger value="pending" className="flex items-center gap-2">
                 <Clock className="h-4 w-4" />
                 Pending
@@ -600,9 +866,182 @@ export default function ApprovalsPage() {
               </TabsTrigger>
             </TabsList>
 
+            {/* Auto-Safe Tab Content */}
+            <TabsContent value="auto-safe" className="mt-4">
+              {autoSafeLoading ? (
+                <div className="space-y-4">
+                  {[1, 2, 3].map((i) => (
+                    <Card key={i}>
+                      <CardContent className="pt-6">
+                        <div className="flex items-start gap-4">
+                          <Skeleton className="h-10 w-10 rounded-lg" />
+                          <div className="flex-1 space-y-2">
+                            <Skeleton className="h-5 w-1/3" />
+                            <Skeleton className="h-4 w-1/2" />
+                          </div>
+                          <Skeleton className="h-8 w-24" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              ) : !autoSafeDetections || autoSafeDetections.length === 0 ? (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <CheckCircle className="h-5 w-5 text-green-500" />
+                      All Optimized!
+                    </CardTitle>
+                    <CardDescription>
+                      No safe optimizations available. Your resources are running efficiently.
+                    </CardDescription>
+                  </CardHeader>
+                </Card>
+              ) : (
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="flex items-center gap-2">
+                          <Sparkles className="h-5 w-5 text-emerald-500" />
+                          Auto-Safe Actions
+                          {resourceFilter !== "all" && (
+                            <Badge variant="secondary" className="text-xs">
+                              {resourceFilter.replace("_", " ")}
+                            </Badge>
+                          )}
+                        </CardTitle>
+                        <CardDescription>
+                          Safe optimizations that can be executed automatically without risk
+                        </CardDescription>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {/* Execution Mode Toggle */}
+                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border bg-card">
+                          <span className={`text-sm ${!isMounted ? "text-muted-foreground" : !isAutomated ? "font-medium" : "text-muted-foreground"}`}>
+                            Manual
+                          </span>
+                          <Switch
+                            checked={isMounted && isAutomated}
+                            onCheckedChange={handleModeChange}
+                            disabled={modeUpdating || !isMounted || driftTick.isPending}
+                          />
+                          <span className={`text-sm ${!isMounted ? "text-muted-foreground" : isAutomated ? "font-medium text-green-600" : "text-muted-foreground"}`}>
+                            Auto
+                          </span>
+                        </div>
+                        <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50">
+                          Save ${filteredAutoSafeSavings.toFixed(0)}/mo
+                        </Badge>
+                        {filteredAutoSafeDetections.length > 0 && (
+                          <Button
+                            variant="default"
+                            size="sm"
+                            onClick={() => setExecuteAllDialog({ open: true, detections: filteredAutoSafeDetections })}
+                            disabled={executingAll || executeActionMutation.isPending}
+                            className="bg-emerald-600 hover:bg-emerald-700"
+                          >
+                            {executingAll ? (
+                              <>
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                Executing...
+                              </>
+                            ) : (
+                              <>
+                                <PlayCircle className="h-4 w-4 mr-2" />
+                                Execute All ({filteredAutoSafeDetections.length})
+                              </>
+                            )}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {filteredAutoSafeDetections.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-8 text-center">
+                        <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center mb-3">
+                          <CheckCircle className="h-6 w-6 text-muted-foreground" />
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          No {resourceFilter !== "all" ? resourceFilter.replace("_", " ") : ""} optimizations available
+                        </p>
+                        {resourceFilter !== "all" && (
+                          <Button
+                            variant="link"
+                            size="sm"
+                            onClick={() => setResourceFilter("all")}
+                            className="mt-2"
+                          >
+                            View all services
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      filteredAutoSafeDetections.map((detection) => {
+                        const isExecuting = executingAutoSafeId === detection.id
+                        return (
+                          <div
+                            key={detection.id}
+                            className="flex items-center justify-between p-4 border rounded-lg hover:bg-emerald-50/50 transition-colors"
+                          >
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium">{detection.resourceName}</span>
+                                <Badge variant="outline" className="text-xs">
+                                  {detection.region}
+                                </Badge>
+                                {detection.env && (
+                                  <Badge variant="secondary" className="text-xs">
+                                    {detection.env}
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="text-sm text-muted-foreground mt-1">
+                                {detection.scenarioName}
+                              </div>
+                              <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                                <span>
+                                  Save{" "}
+                                  <span className="text-green-600 font-medium">
+                                    ${detection.potentialSavings.toFixed(2)}
+                                  </span>
+                                  /mo
+                                </span>
+                                <span>Confidence: {detection.confidence}%</span>
+                              </div>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant={isExecuting ? "secondary" : "default"}
+                              onClick={() => setConfirmDialog({ open: true, detection })}
+                              disabled={isExecuting || executingAll || executeActionMutation.isPending}
+                              className="bg-emerald-600 hover:bg-emerald-700"
+                            >
+                              {isExecuting ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  Executing...
+                                </>
+                              ) : (
+                                <>
+                                  <Play className="h-4 w-4 mr-2" />
+                                  Execute
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        )
+                      })
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+
             {/* Tab Content */}
             <TabsContent value={activeTab} className="mt-4">
-              {isLoading ? (
+              {activeTab === "auto-safe" ? null : isLoading ? (
                 <div className="space-y-4">
                   {[1, 2, 3].map((i) => (
                     <Card key={i}>
@@ -870,29 +1309,189 @@ export default function ApprovalsPage() {
             </TabsContent>
           </Tabs>
 
+          {/* Recent Activity */}
+          {auditLog && auditLog.length > 0 && (
+            <Card className="mt-4">
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <History className="h-5 w-5" />
+                  <CardTitle className="text-base">Recent Activity</CardTitle>
+                </div>
+                <CardDescription>
+                  Recent optimization actions
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {auditLog.slice(0, 10).map((entry) => (
+                    <div key={entry.id} className="flex items-center justify-between p-3 border rounded-lg text-sm">
+                      <div className="flex items-center gap-3">
+                        <div className={`h-8 w-8 rounded-full flex items-center justify-center ${
+                          entry.success ? "bg-green-500/10" : "bg-red-500/10"
+                        }`}>
+                          {entry.success ? (
+                            <CheckCircle className="h-4 w-4 text-green-500" />
+                          ) : (
+                            <AlertCircle className="h-4 w-4 text-red-500" />
+                          )}
+                        </div>
+                        <div>
+                          <div className="font-medium">{entry.resource_name}</div>
+                          <div className="text-xs text-muted-foreground">{entry.message}</div>
+                        </div>
+                      </div>
+                      <div className="text-xs text-muted-foreground text-right">
+                        <div>{new Date(entry.executed_at).toLocaleString()}</div>
+                        <div>{entry.duration_ms}ms</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Help section */}
           <Card className="mt-4">
             <CardHeader>
-              <CardTitle className="text-base">Understanding Mode 3</CardTitle>
+              <CardTitle className="text-base">Understanding Approvals</CardTitle>
             </CardHeader>
-            <CardContent className="text-sm text-muted-foreground space-y-2">
-              <p>
-                <strong>Mode 3 (Approval-Based)</strong> is for optimizations that
-                require human review before execution:
-              </p>
-              <ul className="list-disc list-inside space-y-1 ml-2">
-                <li>Production resource changes (RDS, ASGs, Load Balancers)</li>
-                <li>High-impact optimizations with significant savings</li>
-                <li>Resources marked as &quot;Recommend Only&quot; in settings</li>
-              </ul>
-              <p className="pt-2">
-                <strong>Actions:</strong> Approve to execute, Reject to dismiss,
-                Snooze to delay, or Schedule for off-peak hours.
-              </p>
+            <CardContent className="text-sm text-muted-foreground space-y-3">
+              <div>
+                <p className="font-medium text-foreground mb-1">Auto-Safe Actions</p>
+                <p>
+                  Safe optimizations that can be executed immediately without risk.
+                  These include idle CI runners, orphaned resources, and log retention policies.
+                </p>
+              </div>
+              <div>
+                <p className="font-medium text-foreground mb-1">Pending Approvals</p>
+                <p>
+                  Optimizations requiring human review: production resources, high-impact changes,
+                  and resources marked as &quot;Recommend Only&quot; in settings.
+                </p>
+              </div>
+              <div className="pt-1">
+                <p className="font-medium text-foreground mb-1">Available Actions</p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                  <li><strong>Execute</strong> - Apply the optimization immediately</li>
+                  <li><strong>Schedule</strong> - Execute during off-peak hours</li>
+                  <li><strong>Snooze</strong> - Delay the recommendation</li>
+                  <li><strong>Reject</strong> - Dismiss with a reason</li>
+                </ul>
+              </div>
             </CardContent>
           </Card>
         </div>
       </main>
+
+      {/* Single Action Confirmation Dialog */}
+      <AlertDialog
+        open={confirmDialog.open}
+        onOpenChange={(open) => setConfirmDialog({ open, detection: open ? confirmDialog.detection : null })}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Action</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmDialog.detection && (
+                <>
+                  Are you sure you want to{" "}
+                  <strong>{getActionDescription(confirmDialog.detection)}</strong>?
+                  <div className="mt-4 p-3 bg-muted rounded-lg">
+                    <div className="font-medium">{confirmDialog.detection.resourceName}</div>
+                    <div className="text-sm text-muted-foreground mt-1">
+                      {confirmDialog.detection.scenarioName}
+                    </div>
+                    <div className="text-sm text-green-600 mt-2">
+                      Potential savings: ${confirmDialog.detection.potentialSavings.toFixed(2)}/mo
+                    </div>
+                  </div>
+                  <div className="mt-4 text-sm">
+                    This action is classified as <Badge variant="secondary">Auto-Safe</Badge> and should not impact running workloads.
+                  </div>
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => confirmDialog.detection && handleExecuteAutoSafe(confirmDialog.detection)}
+              disabled={executeActionMutation.isPending}
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
+              {executeActionMutation.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Executing...
+                </>
+              ) : (
+                "Execute Action"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Execute All Confirmation Dialog */}
+      <AlertDialog
+        open={executeAllDialog.open}
+        onOpenChange={(open) => setExecuteAllDialog({ open, detections: open ? executeAllDialog.detections : [] })}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Execute All Actions</AlertDialogTitle>
+            <AlertDialogDescription>
+              <div className="space-y-4">
+                <div>
+                  You are about to execute <strong>{executeAllDialog.detections.length}</strong> optimization actions.
+                </div>
+
+                <div className="p-3 bg-muted rounded-lg">
+                  <div className="text-sm font-medium mb-2">Summary:</div>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div className="text-muted-foreground">Total Actions:</div>
+                    <div className="font-medium">{executeAllDialog.detections.length}</div>
+                    <div className="text-muted-foreground">Potential Savings:</div>
+                    <div className="font-medium text-green-600">
+                      ${executeAllDialog.detections.reduce((sum, d) => sum + d.potentialSavings, 0).toFixed(2)}/mo
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-sm">
+                  All actions will be executed sequentially. This may take a few moments.
+                </div>
+
+                <div className="text-sm">
+                  These actions are classified as <Badge variant="secondary">Auto-Safe</Badge> and should not impact running workloads.
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => handleExecuteAll(executeAllDialog.detections)}
+              disabled={executingAll}
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
+              {executingAll ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Executing...
+                </>
+              ) : (
+                <>
+                  <PlayCircle className="h-4 w-4 mr-2" />
+                  Execute All ({executeAllDialog.detections.length})
+                </>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

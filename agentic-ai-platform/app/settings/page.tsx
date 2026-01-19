@@ -1,20 +1,66 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { Header } from "@/components/header"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Settings, Database, Bell, Shield, RefreshCw, Sliders, Lock } from "lucide-react"
+import { Settings, Database, Bell, Shield, RefreshCw, Sliders, Lock, LogOut, User } from "lucide-react"
 import { useConnectionStore } from "@/stores/connection-store"
+import { getSupabaseClient } from "@/lib/supabase/connection"
 import { PolicyTable } from "@/components/settings/PolicyTable"
 import { PolicyPresets } from "@/components/settings/PolicyPresets"
 import { BulkPolicyActions } from "@/components/settings/BulkPolicyActions"
 import type { PolicyResource } from "@/hooks/usePolicyResources"
 
 export default function SettingsPage() {
+  const router = useRouter()
   const { isConnected, url, stats, disconnect } = useConnectionStore()
+  const [userEmail, setUserEmail] = useState<string | null>(null)
+  const [signingOut, setSigningOut] = useState(false)
+
+  useEffect(() => {
+    // Get current user email
+    async function fetchUser() {
+      const client = getSupabaseClient()
+      if (client) {
+        const { data: { user } } = await client.auth.getUser()
+        if (user?.email) {
+          setUserEmail(user.email)
+        }
+      }
+    }
+    fetchUser()
+  }, [])
+
+  async function handleSignOut() {
+    setSigningOut(true)
+    try {
+      const client = getSupabaseClient()
+      if (client) {
+        await client.auth.signOut()
+      }
+
+      // IMPORTANT: Clear ALL tenant context on sign out
+      // This ensures user goes through onboarding flow on next login
+      localStorage.removeItem("aws_env_org_id")
+      localStorage.removeItem("aws_env_account_id")
+      localStorage.removeItem("supabase_active_account")
+
+      // Clear cookies for middleware
+      document.cookie = "aws_env_org_id=; path=/; max-age=0"
+      document.cookie = "aws_env_account_id=; path=/; max-age=0"
+      document.cookie = "aws_env_connected=; path=/; max-age=0"
+
+      // Redirect to login
+      router.push("/login")
+    } catch (error) {
+      console.error("Error signing out:", error)
+      setSigningOut(false)
+    }
+  }
   const [selectedResources, setSelectedResources] = useState<PolicyResource[]>([])
 
   const projectName = url
@@ -190,12 +236,52 @@ export default function SettingsPage() {
           </TabsContent>
 
           {/* Security Tab */}
-          <TabsContent value="security">
+          <TabsContent value="security" className="space-y-6">
+            {/* Account Section */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <User className="h-5 w-5" />
+                  <CardTitle>Account</CardTitle>
+                </div>
+                <CardDescription>
+                  Manage your account and authentication
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between p-4 border rounded-lg">
+                  <div>
+                    <div className="font-medium">Signed in as</div>
+                    <div className="text-sm text-muted-foreground">
+                      {userEmail || "Loading..."}
+                    </div>
+                  </div>
+                  <Badge variant="default">Authenticated</Badge>
+                </div>
+
+                <div className="pt-2">
+                  <Button
+                    variant="destructive"
+                    onClick={handleSignOut}
+                    disabled={signingOut}
+                    className="gap-2"
+                  >
+                    <LogOut className="h-4 w-4" />
+                    {signingOut ? "Signing out..." : "Sign Out"}
+                  </Button>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    This will sign you out and disconnect from the database.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* API Keys Section */}
             <Card>
               <CardHeader>
                 <div className="flex items-center gap-2">
                   <Shield className="h-5 w-5" />
-                  <CardTitle>Security & Access</CardTitle>
+                  <CardTitle>API Keys & Access Controls</CardTitle>
                 </div>
                 <CardDescription>
                   Manage API keys and access controls

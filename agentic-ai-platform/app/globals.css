@@ -73,12 +73,43 @@
   .glass-effect {
     @apply bg-background/80 backdrop-blur-xl border border-border/50;
   }
-  
+
   .gradient-text {
     @apply bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent;
   }
-  
+
   .card-hover {
     @apply transition-all duration-300 hover:shadow-lg hover:-translate-y-1;
+  }
+
+  /* Heliozz landing page texture overlay */
+  .texture-overlay {
+    position: absolute;
+    inset: 0;
+    background-image: url('/textures/grain.svg');
+    opacity: 0.03;
+    pointer-events: none;
+  }
+
+  /* Landing page specific dark background */
+  .landing-dark {
+    background-color: #000000;
+    color: #ffffff;
+  }
+
+  /* Hero card step animation */
+  @keyframes fadeInSlide {
+    0% {
+      opacity: 0;
+      transform: translateX(-20px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  .animate-fadeInSlide {
+    animation: fadeInSlide 0.6s ease-out;
   }
 }

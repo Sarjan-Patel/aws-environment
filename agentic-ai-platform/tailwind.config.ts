@@ -60,6 +60,18 @@ const config: Config = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        // Heliozz brand colors
+        heliozz: {
+          blue: {
+            light: "#84B2F7",
+            DEFAULT: "#74ADFE",
+            dark: "#296CF0",
+          },
+        },
+      },
+      fontFamily: {
+        sans: ["var(--font-inter)", "system-ui", "sans-serif"],
+        heading: ["var(--font-poppins)", "system-ui", "sans-serif"],
       },
       borderRadius: {
         lg: "var(--radius)",

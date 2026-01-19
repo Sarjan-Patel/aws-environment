@@ -6,27 +6,23 @@ import { usePathname } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useConnectionStore } from "@/stores/connection-store"
+import { OrgSelector } from "@/components/org-selector"
+import { AccountSelector } from "@/components/account-selector"
 import {
   Activity,
   CheckCircle2,
   CloudCog,
   Database,
-  DollarSign,
   Eye,
   FileCheck,
-  Presentation,
   Settings,
-  Zap,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: Activity },
-  { href: "/monitoring", label: "Monitor", icon: Eye },
-  { href: "/auto-safe", label: "Auto-Safe", icon: Zap },
+  { href: "/dashboard", label: "Dashboard", icon: Activity },
+  { href: "/monitoring", label: "Cloud Usage", icon: Eye },
   { href: "/approvals", label: "Approvals", icon: FileCheck },
-  { href: "/savings", label: "Savings", icon: DollarSign },
-  { href: "/demo", label: "Demo", icon: Presentation },
   { href: "/settings", label: "Settings", icon: Settings },
 ]
 
@@ -76,9 +72,15 @@ export function Header() {
           })}
         </nav>
 
-        {/* Connection Status */}
+        {/* Org and Account Selectors + Connection Status */}
         <div className="ml-auto flex items-center gap-3">
-          <Link href="/setup">
+          {isConnected && (
+            <>
+              <OrgSelector />
+              <AccountSelector />
+            </>
+          )}
+          <Link href="/accounts/connect">
             <Badge
               variant={isConnected ? "success" : "secondary"}
               className="flex items-center gap-2 cursor-pointer hover:opacity-90 transition-all duration-200 px-4 py-1.5 rounded-lg shadow-sm hover:shadow-md"

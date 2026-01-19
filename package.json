@@ -1,0 +1,13 @@
+{
+  "name": "aws-environment",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "cd agentic-ai-platform && npm run build",
+    "dev": "cd agentic-ai-platform && npm run dev",
+    "start": "cd agentic-ai-platform && npm start",
+    "lint": "cd agentic-ai-platform && npm run lint",
+    "install:all": "cd agentic-ai-platform && npm install && cd ../aws-environment && npm install"
+  }
+}
+

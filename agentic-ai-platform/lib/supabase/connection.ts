@@ -22,15 +22,36 @@ export interface ConnectionConfig {
   key: string
 }
 
+export interface SavedAccount {
+  id: string
+  name: string
+  url: string
+  key: string
+  createdAt: string
+}
+
+const ACCOUNTS_STORAGE_KEY = "aws_env_accounts"
+const ACTIVE_ACCOUNT_KEY = "aws_env_active_account"
+
 /**
  * Gets or creates a cached Supabase client for the given credentials
+ * Configured for auth session persistence (works with OTP/magic link)
  */
 function getOrCreateClient(url: string, key: string): SupabaseClient {
   const cacheKey = `${url}:${key}`
   if (cachedClient && cachedClientKey === cacheKey) {
     return cachedClient
   }
-  cachedClient = createClient(url, key)
+  // Create client with auth configuration for session persistence
+  // This enables OTP/magic link authentication to work properly
+  cachedClient = createClient(url, key, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      storage: typeof window !== 'undefined' ? window.localStorage : undefined,
+    },
+  })
   cachedClientKey = cacheKey
   return cachedClient
 }
@@ -209,4 +230,122 @@ export function getSupabaseClient(): SupabaseClient | null {
 
   // Fall back to environment variables
   return createEnvClient()
+}
+
+// ============================================
+// Multi-Account Management Functions
+// ============================================
+
+/**
+ * Gets all saved accounts from localStorage
+ */
+export function getSavedAccounts(): SavedAccount[] {
+  if (typeof window === "undefined") return []
+
+  try {
+    const stored = localStorage.getItem(ACCOUNTS_STORAGE_KEY)
+    if (!stored) return []
+    return JSON.parse(stored)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Saves a new account to the accounts list
+ */
+export function saveAccount(name: string, url: string, key: string): SavedAccount {
+  const accounts = getSavedAccounts()
+
+  // Check if account with same URL already exists
+  const existingIndex = accounts.findIndex(a => a.url === url)
+
+  const account: SavedAccount = {
+    id: existingIndex >= 0 ? accounts[existingIndex].id : crypto.randomUUID(),
+    name,
+    url,
+    key,
+    createdAt: existingIndex >= 0 ? accounts[existingIndex].createdAt : new Date().toISOString(),
+  }
+
+  if (existingIndex >= 0) {
+    // Update existing account
+    accounts[existingIndex] = account
+  } else {
+    // Add new account
+    accounts.push(account)
+  }
+
+  localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(accounts))
+  return account
+}
+
+/**
+ * Removes an account from the saved accounts list
+ */
+export function removeAccount(accountId: string): void {
+  if (typeof window === "undefined") return
+
+  const accounts = getSavedAccounts()
+  const filtered = accounts.filter(a => a.id !== accountId)
+  localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(filtered))
+
+  // If this was the active account, clear active account
+  const activeId = getActiveAccountId()
+  if (activeId === accountId) {
+    localStorage.removeItem(ACTIVE_ACCOUNT_KEY)
+    clearConnection()
+  }
+}
+
+/**
+ * Gets the active account ID
+ */
+export function getActiveAccountId(): string | null {
+  if (typeof window === "undefined") return null
+  return localStorage.getItem(ACTIVE_ACCOUNT_KEY)
+}
+
+/**
+ * Gets the active account details
+ */
+export function getActiveAccount(): SavedAccount | null {
+  const activeId = getActiveAccountId()
+  if (!activeId) return null
+
+  const accounts = getSavedAccounts()
+  return accounts.find(a => a.id === activeId) || null
+}
+
+/**
+ * Sets the active account and saves its connection
+ */
+export function setActiveAccount(accountId: string): boolean {
+  const accounts = getSavedAccounts()
+  const account = accounts.find(a => a.id === accountId)
+
+  if (!account) return false
+
+  localStorage.setItem(ACTIVE_ACCOUNT_KEY, accountId)
+  saveConnection(account.url, account.key)
+
+  // Reset cached client to use new credentials
+  cachedClient = null
+  cachedClientKey = null
+
+  return true
+}
+
+/**
+ * Updates an existing account's details
+ */
+export function updateAccount(accountId: string, updates: Partial<Pick<SavedAccount, 'name'>>): boolean {
+  const accounts = getSavedAccounts()
+  const index = accounts.findIndex(a => a.id === accountId)
+
+  if (index < 0) return false
+
+  accounts[index] = { ...accounts[index], ...updates }
+  localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(accounts))
+  return true
 }

@@ -566,7 +566,7 @@ export function RecommendationCard({
             variant="outline"
           >
             <Calendar className="h-4 w-4 mr-1" />
-            Schedule Weekend
+            Schedule
           </Button>
         </div>
 
