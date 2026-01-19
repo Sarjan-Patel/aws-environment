@@ -53,7 +53,7 @@ function getServiceName(resourceType: ResourceType): string {
   return names[resourceType] || "resources"
 }
 
-interface ResourceCost {
+export interface ResourceCost {
   hourly_cost?: number | null
   storage_monthly_cost?: number | null
   monthly_cost?: number | null
@@ -286,7 +286,7 @@ export function CostTrendChart({
   )
 }
 
-interface ResourceUtilization {
+export interface ResourceUtilization {
   // EC2
   current_cpu?: number | null
   current_memory?: number | null
@@ -400,7 +400,7 @@ export function UtilizationTrendChart({
       // Load balancers don't have CPU/Memory, use request count as a metric (normalized to 0-100)
       const requests = resources
         .map((r) => r.avg_request_count_7d)
-        .filter((r): r is number => r !== null && r > 0)
+        .filter((r): r is number => r !== null && r !== undefined && r > 0)
       if (requests.length > 0) {
         const maxRequests = Math.max(...requests)
         avgCpu = requests.length > 0 ? (requests.reduce((a, b) => a + b, 0) / requests.length / maxRequests) * 100 : 0

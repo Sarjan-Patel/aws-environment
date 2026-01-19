@@ -14,8 +14,10 @@ import { Button } from "@/components/ui/button"
 import { useConnectionStore } from "@/stores/connection-store"
 import { MetricsCards, WasteAlertBanner } from "@/components/dashboard/MetricsCards"
 import { WasteBreakdown, RecentActivity } from "@/components/dashboard/WasteBreakdown"
-import { useDashboardData } from "@/hooks/useWasteDetection"
+import { AIInsight } from "@/components/dashboard/AIInsight"
+import { useDashboardData, useRefreshDetection } from "@/hooks/useWasteDetection"
 import { useRealtimeResources } from "@/hooks/useRealtime"
+import { useAuditLog } from "@/hooks/useActionExecution"
 import {
   Activity,
   AlertTriangle,
@@ -45,10 +47,23 @@ export default function DashboardPage() {
     counts,
     wasteDetection,
     autoSafe,
+    approvals,
     wasteByScenario,
     isLoading,
-    refetch,
   } = useDashboardData()
+
+  // Refresh mutation that bypasses server cache
+  const refreshDetection = useRefreshDetection()
+
+  // Fetch audit log for recent activity
+  const { data: auditLog, isLoading: auditLogLoading, refetch: refetchAuditLog } = useAuditLog(10)
+
+  // Handle refresh - bypasses server cache for fresh data
+  const handleRefresh = () => {
+    console.log("[Dashboard] Refreshing data (bypassing cache)...")
+    refreshDetection.mutate()
+    refetchAuditLog()
+  }
 
   // Log when data is loaded
   useEffect(() => {
@@ -73,9 +88,14 @@ export default function DashboardPage() {
                 Monitor your cloud costs and optimization opportunities
               </p>
             </div>
-            <Button variant="outline" onClick={() => refetch()} className="shadow-sm hover:shadow-md transition-shadow duration-200 border-2">
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Refresh Data
+            <Button
+              variant="outline"
+              onClick={handleRefresh}
+              disabled={refreshDetection.isPending}
+              className="shadow-sm hover:shadow-md transition-shadow duration-200 border-2"
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${refreshDetection.isPending ? "animate-spin" : ""}`} />
+              {refreshDetection.isPending ? "Refreshing..." : "Refresh Data"}
             </Button>
           </div>
 
@@ -86,6 +106,18 @@ export default function DashboardPage() {
             scenarioCount={wasteByScenario.length}
             isLoading={isLoading}
           />
+
+          {/* AI Insight - Powered by OpenAI */}
+          {!isLoading && (counts?.total ?? 0) > 0 && (
+            <AIInsight
+              totalResources={counts?.total ?? 0}
+              totalDetections={wasteDetection?.totalDetections ?? 0}
+              totalSavings={wasteDetection?.totalPotentialSavings ?? 0}
+              topScenarios={wasteByScenario}
+              autoSafeCount={autoSafe.count}
+              approvalCount={approvals.count}
+            />
+          )}
 
           {/* Summary Cards - Data from unified hook */}
           <MetricsCards
@@ -143,7 +175,7 @@ export default function DashboardPage() {
           {/* Waste Breakdown and Activity - Full Width */}
           <div className="grid gap-6 lg:grid-cols-2">
             <WasteBreakdown scenarios={wasteByScenario} isLoading={isLoading} />
-            <RecentActivity />
+            <RecentActivity auditLog={auditLog} isLoading={auditLogLoading} />
           </div>
         </div>
       </main>

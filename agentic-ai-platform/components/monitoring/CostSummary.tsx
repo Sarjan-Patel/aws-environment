@@ -38,6 +38,8 @@ interface ResourceCost {
   storage_monthly_cost?: number | null
   monthly_cost?: number | null
   estimated_monthly_cost?: number | null
+  // Allow any additional properties from resource types
+  [key: string]: any
 }
 
 export function CostSummary({

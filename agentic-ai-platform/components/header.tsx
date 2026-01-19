@@ -14,6 +14,7 @@ import {
   DollarSign,
   Eye,
   FileCheck,
+  Presentation,
   Settings,
   Zap,
 } from "lucide-react"
@@ -21,11 +22,11 @@ import { cn } from "@/lib/utils"
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: Activity },
-  { href: "/resources", label: "Resources", icon: Database },
-  { href: "/savings", label: "Savings", icon: DollarSign },
+  { href: "/monitoring", label: "Monitor", icon: Eye },
   { href: "/auto-safe", label: "Auto-Safe", icon: Zap },
   { href: "/approvals", label: "Approvals", icon: FileCheck },
-  { href: "/monitoring", label: "Monitor", icon: Eye },
+  { href: "/savings", label: "Savings", icon: DollarSign },
+  { href: "/demo", label: "Demo", icon: Presentation },
   { href: "/settings", label: "Settings", icon: Settings },
 ]
 

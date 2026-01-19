@@ -1,0 +1,10 @@
+{
+  "/demo/page": "app/demo/page.js",
+  "/page": "app/page.js",
+  "/approvals/page": "app/approvals/page.js",
+  "/savings/page": "app/savings/page.js",
+  "/auto-safe/page": "app/auto-safe/page.js",
+  "/api/execute-action/route": "app/api/execute-action/route.js",
+  "/api/detect-waste/route": "app/api/detect-waste/route.js",
+  "/settings/page": "app/settings/page.js"
+}

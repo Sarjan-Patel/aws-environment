@@ -58,7 +58,7 @@ import {
   CacheClustersTable,
 } from "@/components/monitoring/ResourceTables"
 import { CostSummary } from "@/components/monitoring/CostSummary"
-import { CostTrendChart, UtilizationTrendChart } from "@/components/monitoring/TrendChart"
+import { CostTrendChart, UtilizationTrendChart, ResourceCost, ResourceUtilization as TrendResourceUtilization } from "@/components/monitoring/TrendChart"
 import { Pagination } from "@/components/ui/pagination"
 import {
   Activity,
@@ -416,19 +416,19 @@ export default function MonitoringPage() {
                 resourceType === "instances"
                   ? undefined // Use metrics_daily for EC2
                   : resourceType === "rds"
-                  ? (rdsInstances || [])
+                  ? (rdsInstances as unknown as ResourceCost[] | undefined)
                   : resourceType === "lambda"
-                  ? (lambdaFunctions || [])
+                  ? (lambdaFunctions as unknown as ResourceCost[] | undefined)
                   : resourceType === "s3"
-                  ? (s3Buckets || [])
+                  ? (s3Buckets as unknown as ResourceCost[] | undefined)
                   : resourceType === "volumes"
-                  ? (volumes || [])
+                  ? (volumes as unknown as ResourceCost[] | undefined)
                   : resourceType === "load-balancers"
-                  ? (loadBalancers || [])
+                  ? (loadBalancers as unknown as ResourceCost[] | undefined)
                   : resourceType === "cache-clusters"
-                  ? (cacheClusters || [])
+                  ? (cacheClusters as unknown as ResourceCost[] | undefined)
                   : resourceType === "elastic-ips"
-                  ? (elasticIPs || [])
+                  ? (elasticIPs as unknown as ResourceCost[] | undefined)
                   : undefined
               }
             />
@@ -438,19 +438,19 @@ export default function MonitoringPage() {
                 resourceType === "instances"
                   ? undefined // Use metrics_daily for EC2
                   : resourceType === "rds"
-                  ? (rdsInstances || [])
+                  ? (rdsInstances as unknown as TrendResourceUtilization[] | undefined)
                   : resourceType === "lambda"
-                  ? (lambdaFunctions || [])
+                  ? (lambdaFunctions as unknown as TrendResourceUtilization[] | undefined)
                   : resourceType === "s3"
-                  ? (s3Buckets || [])
+                  ? (s3Buckets as unknown as TrendResourceUtilization[] | undefined)
                   : resourceType === "volumes"
-                  ? (volumes || [])
+                  ? (volumes as unknown as TrendResourceUtilization[] | undefined)
                   : resourceType === "load-balancers"
-                  ? (loadBalancers || [])
+                  ? (loadBalancers as unknown as TrendResourceUtilization[] | undefined)
                   : resourceType === "cache-clusters"
-                  ? (cacheClusters || [])
+                  ? (cacheClusters as unknown as TrendResourceUtilization[] | undefined)
                   : resourceType === "elastic-ips"
-                  ? (elasticIPs || [])
+                  ? (elasticIPs as unknown as TrendResourceUtilization[] | undefined)
                   : undefined
               }
             />
@@ -697,12 +697,13 @@ export default function MonitoringPage() {
 
 type ColorVariant = "blue" | "purple" | "amber" | "green" | "rose"
 
+// Subtle, professional color palette - removed vibrant colors
 const colorStyles: Record<ColorVariant, { bg: string; text: string; accent: string }> = {
-  blue: { bg: "bg-blue-500/10", text: "text-blue-600", accent: "bg-blue-500/5" },
-  purple: { bg: "bg-purple-500/10", text: "text-purple-600", accent: "bg-purple-500/5" },
-  amber: { bg: "bg-amber-500/10", text: "text-amber-600", accent: "bg-amber-500/5" },
-  green: { bg: "bg-green-500/10", text: "text-green-600", accent: "bg-green-500/5" },
-  rose: { bg: "bg-rose-500/10", text: "text-rose-600", accent: "bg-rose-500/5" },
+  blue: { bg: "bg-muted/60", text: "text-muted-foreground", accent: "bg-muted/40" },
+  purple: { bg: "bg-muted/60", text: "text-muted-foreground", accent: "bg-muted/40" },
+  amber: { bg: "bg-muted/60", text: "text-muted-foreground", accent: "bg-muted/40" },
+  green: { bg: "bg-muted/60", text: "text-muted-foreground", accent: "bg-muted/40" },
+  rose: { bg: "bg-muted/60", text: "text-muted-foreground", accent: "bg-muted/40" },
 }
 
 function ResourceTypeCard({
@@ -726,23 +727,24 @@ function ResourceTypeCard({
 
   return (
     <Card
-      className={`relative overflow-hidden transition-all cursor-pointer border-2 ${
-        isActive ? "border-primary shadow-lg" : "border-transparent hover:border-primary/50"
+      className={`relative overflow-hidden transition-all cursor-pointer border ${
+        isActive 
+          ? "border-primary/50 bg-primary/5 shadow-sm" 
+          : "border-border bg-card hover:border-primary/30 hover:bg-muted/30"
       }`}
       onClick={onClick}
     >
-      <div className={`absolute top-0 right-0 w-24 h-24 ${styles.accent} rounded-full -mr-12 -mt-12`} />
-      <CardContent className="flex items-center gap-4 pt-6 pb-6">
-        <div className={`p-3 ${styles.bg} rounded-xl`}>
+      <CardContent className="flex items-center gap-3 pt-4 pb-4">
+        <div className={`p-2.5 ${styles.bg} rounded-lg border border-border/50`}>
           <div className={styles.text}>{icon}</div>
         </div>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           {loading ? (
-            <Skeleton className="h-8 w-16 mb-1" />
+            <Skeleton className="h-7 w-16 mb-1.5" />
           ) : (
-            <div className="text-2xl font-bold">{count}</div>
+            <div className="text-2xl font-semibold text-foreground mb-0.5">{count}</div>
           )}
-          <div className="text-sm text-muted-foreground">{label}</div>
+          <div className="text-xs text-muted-foreground font-medium leading-tight">{label}</div>
         </div>
       </CardContent>
     </Card>
