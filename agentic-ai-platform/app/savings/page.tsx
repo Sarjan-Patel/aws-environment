@@ -28,9 +28,6 @@ import { CostTrendChart, SavingsByScenarioChart } from "@/components/dashboard/C
 import { useDashboardData } from "@/hooks/useWasteDetection"
 import { useAuditLog } from "@/hooks/useActionExecution"
 
-// Force dynamic rendering to avoid build-time errors during static generation
-export const dynamic = 'force-dynamic'
-
 export default function SavingsPage() {
   const { stats, isLoading } = useSavingsTracking()
   const { wasteByScenario, autoSafe, approvals, isLoading: detectionLoading, refetch } = useDashboardData()

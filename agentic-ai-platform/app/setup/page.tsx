@@ -20,9 +20,6 @@ import { Badge } from "@/components/ui/badge"
 import { useConnectionStore } from "@/stores/connection-store"
 import { Database, CheckCircle2, XCircle, Loader2, Server, HardDrive, Cloud, Activity } from "lucide-react"
 
-// Force dynamic rendering to avoid build-time errors during static generation
-export const dynamic = 'force-dynamic'
-
 export default function SetupPage() {
   const router = useRouter()
   const { isConnected, isLoading, error, stats, connect, disconnect, initialize } =

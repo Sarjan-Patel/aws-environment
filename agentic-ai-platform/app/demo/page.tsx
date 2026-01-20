@@ -24,9 +24,6 @@ import {
 import { ProblemCanvas, ArchitectureCanvas, DetectorCanvas } from "@/components/demo"
 import { Header } from "@/components/header"
 
-// Force dynamic rendering to avoid build-time errors during static generation
-export const dynamic = 'force-dynamic'
-
 export default function DemoPage() {
   return (
     <div className="min-h-screen bg-slate-50">

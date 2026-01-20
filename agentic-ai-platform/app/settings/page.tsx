@@ -18,9 +18,6 @@ import { PolicyPresets } from "@/components/settings/PolicyPresets"
 import { BulkPolicyActions } from "@/components/settings/BulkPolicyActions"
 import type { PolicyResource } from "@/hooks/usePolicyResources"
 
-// Force dynamic rendering to avoid build-time errors during static generation
-export const dynamic = 'force-dynamic'
-
 export default function SettingsPage() {
   const router = useRouter()
   const { isConnected, url, stats, disconnect } = useConnectionStore()
