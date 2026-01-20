@@ -7,7 +7,9 @@
     "dev": "cd agentic-ai-platform && npm run dev",
     "start": "cd agentic-ai-platform && npm start",
     "lint": "cd agentic-ai-platform && npm run lint",
-    "install:all": "cd agentic-ai-platform && npm install && cd ../aws-environment && npm install"
+    "install:all": "cd agentic-ai-platform && npm install && cd ../aws-environment && npm install",
+    "clean": "cd agentic-ai-platform && rm -rf .next node_modules package-lock.json && npm install",
+    "prebuild": "cd agentic-ai-platform && npm install"
   }
 }
 
