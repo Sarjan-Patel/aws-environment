@@ -75,15 +75,20 @@ export default function LoginPage() {
 
     try {
       const { data, error: signInError } = await client.auth.signInWithPassword({
-        email,
+        email: email.trim().toLowerCase(),
         password,
       })
 
       if (signInError) {
-        if (signInError.message.includes("Invalid login credentials")) {
+        console.error("[SignIn] Error:", signInError)
+        if (signInError.message.includes("Invalid login credentials") || signInError.message.includes("Invalid credentials")) {
           setError("Invalid email or password. Please try again.")
+        } else if (signInError.message.includes("Email not confirmed")) {
+          setError("Please check your email and confirm your account before signing in.")
+        } else if (signInError.message.includes("Too many requests")) {
+          setError("Too many login attempts. Please wait a moment and try again.")
         } else {
-          setError(signInError.message)
+          setError(signInError.message || "Failed to sign in. Please try again.")
         }
         setLoading(false)
         return
@@ -129,18 +134,26 @@ export default function LoginPage() {
 
     try {
       const { data, error: signUpError } = await client.auth.signUp({
-        email,
+        email: email.trim().toLowerCase(),
         password,
         options: {
           emailRedirectTo: `${window.location.origin}/login`,
+          data: {
+            email: email.trim().toLowerCase(),
+          },
         },
       })
 
       if (signUpError) {
-        if (signUpError.message.includes("already registered")) {
+        console.error("[SignUp] Error:", signUpError)
+        if (signUpError.message.includes("already registered") || signUpError.message.includes("already been registered")) {
           setError("This email is already registered. Please sign in instead.")
+        } else if (signUpError.message.includes("password")) {
+          setError("Password does not meet requirements. Please use a stronger password.")
+        } else if (signUpError.message.includes("email")) {
+          setError("Invalid email address. Please check and try again.")
         } else {
-          setError(signUpError.message)
+          setError(signUpError.message || "Failed to create account. Please try again.")
         }
         setLoading(false)
         return
@@ -230,6 +243,7 @@ export default function LoginPage() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="w-full bg-transparent border-0 border-b border-gray-600 rounded-none pl-8 pr-4 py-3 text-gray-100 placeholder:text-gray-500 focus:border-[#74ADFE] focus:outline-none focus:ring-0 transition-colors [&:-webkit-autofill]:[-webkit-background-clip:text] [&:-webkit-autofill]:[-webkit-text-fill-color:rgb(243,244,246)] [&:-webkit-autofill]:[transition:background-color_5000s_ease-in-out_0s]"
+                    autoComplete="email"
                     required
                     disabled={loading}
                   />
@@ -250,6 +264,7 @@ export default function LoginPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="w-full bg-transparent border-0 border-b border-gray-600 rounded-none pl-8 pr-12 py-3 text-gray-100 placeholder:text-gray-500 focus:border-[#74ADFE] focus:outline-none focus:ring-0 transition-colors [&:-webkit-autofill]:[-webkit-background-clip:text] [&:-webkit-autofill]:[-webkit-text-fill-color:rgb(243,244,246)] [&:-webkit-autofill]:[transition:background-color_5000s_ease-in-out_0s]"
+                    autoComplete={isSignUp ? "new-password" : "current-password"}
                     required
                     disabled={loading}
                     minLength={6}
@@ -283,6 +298,7 @@ export default function LoginPage() {
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       className="w-full bg-transparent border-0 border-b border-gray-600 rounded-none pl-8 pr-4 py-3 text-gray-100 placeholder:text-gray-500 focus:border-[#74ADFE] focus:outline-none focus:ring-0 transition-colors [&:-webkit-autofill]:[-webkit-background-clip:text] [&:-webkit-autofill]:[-webkit-text-fill-color:rgb(243,244,246)] [&:-webkit-autofill]:[transition:background-color_5000s_ease-in-out_0s]"
+                      autoComplete="new-password"
                       required
                       disabled={loading}
                       minLength={6}
