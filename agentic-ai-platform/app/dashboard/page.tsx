@@ -31,6 +31,9 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 
+// Force dynamic rendering to avoid build-time errors during static generation
+export const dynamic = 'force-dynamic'
+
 export default function DashboardPage() {
   const { initialize, testCurrentConnection, isConnected } = useConnectionStore()
   const mountTime = useRef(performance.now())

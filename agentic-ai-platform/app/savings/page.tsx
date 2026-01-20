@@ -1,5 +1,8 @@
 "use client"
 
+// Force dynamic rendering to avoid build-time errors
+export const dynamic = 'force-dynamic'
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -24,6 +27,9 @@ import { useSavingsTracking, downloadSavingsReport } from "@/hooks/useSavingsTra
 import { CostTrendChart, SavingsByScenarioChart } from "@/components/dashboard/CostTrendChart"
 import { useDashboardData } from "@/hooks/useWasteDetection"
 import { useAuditLog } from "@/hooks/useActionExecution"
+
+// Force dynamic rendering to avoid build-time errors during static generation
+export const dynamic = 'force-dynamic'
 
 export default function SavingsPage() {
   const { stats, isLoading } = useSavingsTracking()

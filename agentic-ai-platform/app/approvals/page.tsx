@@ -67,6 +67,9 @@ import {
   DollarSign,
 } from "lucide-react"
 
+// Force dynamic rendering to avoid build-time errors during static generation
+export const dynamic = 'force-dynamic'
+
 // Resource types for filtering
 type ResourceTypeFilter = "all" | "instances" | "rds_instances" | "cache_clusters" | "load_balancers" | "lambda_functions" | "volumes" | "snapshots" | "s3_buckets" | "autoscaling_groups" | "log_groups" | "elastic_ips"
 

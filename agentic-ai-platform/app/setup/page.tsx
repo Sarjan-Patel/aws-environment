@@ -1,5 +1,8 @@
 "use client"
 
+// Force dynamic rendering to avoid build-time errors
+export const dynamic = 'force-dynamic'
+
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -16,6 +19,9 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { useConnectionStore } from "@/stores/connection-store"
 import { Database, CheckCircle2, XCircle, Loader2, Server, HardDrive, Cloud, Activity } from "lucide-react"
+
+// Force dynamic rendering to avoid build-time errors during static generation
+export const dynamic = 'force-dynamic'
 
 export default function SetupPage() {
   const router = useRouter()

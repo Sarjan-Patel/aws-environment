@@ -72,6 +72,9 @@ import {
   Filter,
 } from "lucide-react"
 
+// Force dynamic rendering to avoid build-time errors during static generation
+export const dynamic = 'force-dynamic'
+
 type ResourceType = "instances" | "rds" | "lambda" | "s3" | "volumes" | "load-balancers" | "cache-clusters" | "elastic-ips"
 type StatusFilter = "all" | "healthy" | "warning" | "critical" | "idle"
 

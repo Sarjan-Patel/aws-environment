@@ -23,6 +23,9 @@ import { Switch } from "@/components/ui/switch"
 import { WASTE_SCENARIOS } from "@/lib/agent/scenarios"
 import { Calendar, TrendingUp, DollarSign } from "lucide-react"
 
+// Force dynamic rendering to avoid build-time errors during static generation
+export const dynamic = 'force-dynamic'
+
 // Service categories for filtering
 const SERVICE_CATEGORIES = {
   all: { label: "All Services", icon: Layers },

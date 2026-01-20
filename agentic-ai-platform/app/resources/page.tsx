@@ -1,9 +1,15 @@
 "use client"
 
+// Force dynamic rendering to avoid build-time errors
+export const dynamic = 'force-dynamic'
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Database, Server, HardDrive, Cloud, Layers } from "lucide-react"
 import { useResourceCounts } from "@/hooks/useResources"
+
+// Force dynamic rendering to avoid build-time errors during static generation
+export const dynamic = 'force-dynamic'
 
 export default function ResourcesPage() {
   const { data: counts, isLoading } = useResourceCounts()

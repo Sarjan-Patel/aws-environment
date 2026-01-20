@@ -10,6 +10,9 @@ import { ComparisonSection } from '@/components/landing/comparison-section'
 import { DifferentiatorsSection } from '@/components/landing/differentiators-section'
 import { FinalSection } from '@/components/landing/final-section'
 
+// Force dynamic rendering to avoid build-time errors
+export const dynamic = 'force-dynamic'
+
 export default function LandingPage() {
   return (
     <GSAPProvider>
