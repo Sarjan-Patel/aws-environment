@@ -1,7 +1,6 @@
 {
-  "buildCommand": "cd agentic-ai-platform && npm run build",
-  "outputDirectory": "agentic-ai-platform/.next",
-  "installCommand": "cd agentic-ai-platform && npm install",
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
   "framework": "nextjs",
   "rootDirectory": "agentic-ai-platform"
 }
